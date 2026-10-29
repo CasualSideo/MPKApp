@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MPK Mini Studio</title>
+<style>
+:root{--bg:#1c1f24;--panel:#262a31;--line:#383d47;--tx:#eceae4;--mut:#9aa0ad;--pad:#ff4d3d;--amb:#ffb43a;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.45 "Avenir Next","Segoe UI",system-ui,sans-serif;padding:20px;max-width:1000px;margin-inline:auto}
+h1{font-size:26px;margin:0;letter-spacing:-.01em}
+h2{font-size:16px;margin:0 0 12px}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin-bottom:18px}
+section{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:14px}
+button,select,input[type=file]::file-selector-button{font:inherit;background:#343942;color:var(--tx);border:1px solid var(--line);border-radius:6px;padding:6px 12px;cursor:pointer}
+button:hover{background:#40464f}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--amb);outline-offset:2px}
+button.primary{background:var(--pad);border-color:var(--pad);color:#fff;font-weight:600}
+button.rec{background:#7a1f1a;border-color:var(--pad)}
+button.rec.on{background:var(--pad);animation:pulse 1s infinite}
+@keyframes pulse{50%{opacity:.6}}
+@media (prefers-reduced-motion:reduce){button.rec.on{animation:none}}
+.mut{color:var(--mut);font-size:13px}
+#status{font-size:13px;color:var(--mut)}
+.slot{display:grid;grid-template-columns:auto 130px 1fr 110px auto auto;gap:8px;align-items:center;padding:8px;border-radius:8px;border:1px solid var(--line);margin-bottom:6px;transition:background .08s}
+.slot.hit{background:var(--pad);border-color:var(--pad)}
+.slot.learn{border-color:var(--amb)}
+.slot .n{font-family:ui-monospace,Menlo,monospace;font-size:12px}
+@media(max-width:700px){.slot{grid-template-columns:1fr 1fr}}
+#kbwrap{overflow-x:auto;padding-bottom:6px}
+#kb{position:relative;display:flex;height:120px;width:max-content}
+.wk{width:24px;height:120px;background:#e9e6de;border:1px solid #888;border-top:0;border-radius:0 0 4px 4px;flex:none;position:relative}
+.bk{position:absolute;top:0;width:14px;height:74px;background:#23262b;border-radius:0 0 3px 3px;z-index:2}
+.wk.on{background:var(--amb)}.bk.on{background:var(--pad)}
+.wk i{position:absolute;bottom:3px;left:2px;font-size:9px;color:#555;font-style:normal}
+.row{display:flex;flex-wrap:wrap;gap:10px}
+.card{background:#1f2227;border:1px solid var(--line);border-radius:8px;padding:8px 10px;width:150px}
+.meter{height:8px;background:#14161a;border-radius:4px;overflow:hidden;margin:6px 0}
+.meter b{display:block;height:100%;background:var(--amb);width:0}
+.card select{width:100%;padding:3px 6px;font-size:12px}
+.take{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 0;border-top:1px solid var(--line)}
+audio{height:32px}
+#log{font:12px ui-monospace,Menlo,monospace;color:var(--mut);height:120px;overflow:auto;white-space:pre}
+</style>
+</head>
+<body>
+<header>
+  <div><h1>MPK Mini Studio</h1><div id="status">Click Connect, then allow MIDI access. Works in Chrome, Edge and Opera.</div></div>
+  <div><button class="primary" id="connect">Connect MIDI</button> <button id="panic">All notes off</button></div>
+</header>
+
+<section>
+  <h2>Pads and sound mapping</h2>
+  <p class="mut" style="margin-top:0">Press Learn, then hit any pad or key to bind it. Pick a built-in sound or load your own audio file. Any key without a mapping plays the synth.</p>
+  <div id="slots"></div>
+  <button id="addslot">Add mapping</button>
+  <label class="mut" style="margin-left:12px">Synth for keys
+    <select id="wave"><option>sine</option><option>triangle</option><option selected>sawtooth</option><option>square</option><option value="off">off</option></select></label>
+</section>
+
+<section>
+  <h2>Keys</h2>
+  <div id="kbwrap"><div id="kb"></div></div>
+</section>
+
+<section>
+  <h2>Knobs, joystick and pressure</h2>
+  <div class="row" id="ctl">
+    <div class="card"><b>Pitch bend</b><div class="meter"><b id="bendm" style="width:50%"></b></div><span class="mut" id="bendv">0</span></div>
+    <div class="card"><b>Pressure</b><div class="meter"><b id="atm"></b></div><span class="mut" id="atv">0</span></div>
+    <div class="card"><b>Program</b><div style="font-size:22px" id="prog">–</div></div>
+  </div>
+  <p class="mut">Every knob, joystick axis and pedal appears below the first time it moves. Route it to a target if you like.</p>
+  <div class="row" id="ccs"></div>
+</section>
+
+<section>
+  <h2>Record</h2>
+  <button class="rec" id="rec">● Record</button>
+  <span class="mut" id="recinfo">Captures the audio you hear and your MIDI performance together.</span>
+  <div id="takes"></div>
+</section>
+
+<section>
+  <h2>Activity</h2>
+  <div id="log"></div>
+</section>
+
+<script>
+const $=s=>document.querySelector(s);
+let ctx,bus,filt,master,dly,dlyG,recDest,midiAccess;
+let bend=0,sus=false,logLines=[];
+const voices=new Map(),held=new Set();
+
+/* ---------- audio ---------- */
+function initAudio(){
+  if(ctx)return;
+  ctx=new AudioContext();
+  bus=ctx.createGain();filt=ctx.createBiquadFilter();filt.type='lowpass';filt.frequency.value=18000;
+  master=ctx.createGain();master.gain.value=.8;
+  dly=ctx.createDelay(1);dly.delayTime.value=.32;
+  const fb=ctx.createGain();fb.gain.value=.4;dly.connect(fb);fb.connect(dly);
+  dlyG=ctx.createGain();dlyG.gain.value=0;
+  bus.connect(filt);bus.connect(dly);dly.connect(dlyG);dlyG.connect(filt);
+  filt.connect(master);master.connect(ctx.destination);
+  recDest=ctx.createMediaStreamDestination();master.connect(recDest);
+  buildSounds();
+}
+const SOUNDS={};
+function mk(len,fn){const b=ctx.createBuffer(1,ctx.sampleRate*len|0,ctx.sampleRate),d=b.getChannelData(0);for(let i=0;i<d.length;i++)d[i]=fn(i/ctx.sampleRate);return b}
+function buildSounds(){
+  const sr=ctx.sampleRate,T=2*Math.PI,nz=()=>Math.random()*2-1;
+  const sweep=(f0,f1,k,dec,len)=>{let p=0;return mk(len,t=>{p+=T*(f1+f0*Math.exp(-t*k))/sr;return Math.sin(p)*Math.exp(-t*dec)})};
+  SOUNDS.Kick=sweep(130,45,28,7,.5);
+  SOUNDS.Tom=sweep(90,110,14,6,.5);
+  SOUNDS.Zap=sweep(2000,100,9,5,.4);
+  SOUNDS.Snare=mk(.3,t=>nz()*Math.exp(-t*18)*.7+Math.sin(T*190*t)*Math.exp(-t*22)*.5);
+  let pv=0;SOUNDS.Hat=mk(.12,t=>{const n=nz(),o=n-pv;pv=n;return o*Math.exp(-t*50)*.6});
+  SOUNDS.Clap=mk(.3,t=>nz()*Math.exp(-t*20)*(((t*90)%1)<.5||t>.04?1:.3)*.7);
+  SOUNDS.Rim=mk(.08,t=>(Math.sin(T*1700*t)*.6+nz()*.3)*Math.exp(-t*70));
+  SOUNDS.Bell=mk(1.2,t=>(Math.sin(T*880*t)+.5*Math.sin(T*1320*t)+.3*Math.sin(T*2210*t))*Math.exp(-t*4)*.4);
+}
+function playBuf(buf,vel,vol){
+  const s=ctx.createBufferSource(),g=ctx.createGain();
+  s.buffer=buf;g.gain.value=vel/127*vol;s.connect(g);g.connect(bus);s.start();
+}
+function synthOn(n,vel){
+  const type=$('#wave').value;if(type==='off')return;
+  synthOff(n,true);
+  const o=ctx.createOscillator(),g=ctx.createGain(),t=ctx.currentTime;
+  o.type=type;o.frequency.value=440*2**((n-69)/12);o.detune.value=bend*200;
+  g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(vel/127*.35,t+.01);
+  o.connect(g);g.connect(bus);o.start();voices.set(n,{o,g});
+}
+function synthOff(n,now){
+  const v=voices.get(n);if(!v)return;
+  const t=ctx.currentTime,r=now?.01:.18;
+  v.g.gain.cancelScheduledValues(t);v.g.gain.setValueAtTime(v.g.gain.value,t);
+  v.g.gain.linearRampToValueAtTime(0,t+r);v.o.stop(t+r+.02);voices.delete(n);
+}
+function allOff(){[...voices.keys()].forEach(n=>synthOff(n));held.clear()}
+
+/* ---------- mappings ---------- */
+const DEFAULTS=['Kick','Snare','Hat','Clap','Tom','Rim','Bell','Zap'];
+let saved={};try{saved=JSON.parse(localStorage.getItem('mpk-studio')||'{}')}catch(e){}
+let slots=saved.slots||DEFAULTS.map((s,i)=>({note:36+i,ch:9,sound:s,vol:.9}));
+let ccTargets=saved.cc||{};
+if(saved.wave)$('#wave').value=saved.wave;
+let learning=-1;
+function save(){try{localStorage.setItem('mpk-studio',JSON.stringify({slots:slots.map(({buf,...r})=>r),cc:ccTargets,wave:$('#wave').value}))}catch(e){}}
+function renderSlots(){
+  $('#slots').innerHTML=slots.map((s,i)=>`<div class="slot${learning===i?' learn':''}" data-i="${i}">
+    <button data-a="learn">${learning===i?'Waiting…':'Learn'}</button>
+    <span class="n">note ${s.note} · ch ${s.ch+1}</span>
+    <span><select data-a="snd">${DEFAULTS.map(k=>`<option${s.sound===k?' selected':''}>${k}</option>`).join('')}<option value="__file"${s.sound==='__file'?' selected':''}>${s.fileName?'File: '+s.fileName:'Load file…'}</option></select>
+    <input type="file" accept="audio/*" hidden data-a="file"></span>
+    <input type="range" min="0" max="1" step=".01" value="${s.vol}" data-a="vol" aria-label="Volume">
+    <button data-a="test">Test</button><button data-a="del" aria-label="Remove">✕</button></div>`).join('');
+}
+$('#slots').addEventListener('click',e=>{
+  const row=e.target.closest('.slot');if(!row)return;const i=+row.dataset.i,a=e.target.dataset.a;
+  if(a==='learn'){learning=learning===i?-1:i;renderSlots()}
+  if(a==='test'){initAudio();ctx.resume();trigger(slots[i],100)}
+  if(a==='del'){slots.splice(i,1);save();renderSlots()}
+});
+$('#slots').addEventListener('input',e=>{const i=+e.target.closest('.slot')?.dataset.i;if(e.target.dataset.a==='vol'){slots[i].vol=+e.target.value;save()}});
+$('#slots').addEventListener('change',async e=>{
+  const row=e.target.closest('.slot');if(!row)return;const i=+row.dataset.i,s=slots[i],a=e.target.dataset.a;
+  if(a==='snd'){
+    if(e.target.value==='__file'){row.querySelector('[data-a=file]').click();e.target.value=s.sound;return}
+    s.sound=e.target.value;save();
+  }
+  if(a==='file'&&e.target.files[0]){
+    initAudio();await ctx.resume();const f=e.target.files[0];
+    try{s.buf=await ctx.decodeAudioData(await f.arrayBuffer());s.sound='__file';s.fileName=f.name;save();renderSlots()}
+    catch(err){alert('Could not decode that audio file.')}
+  }
+});
+$('#addslot').onclick=()=>{slots.push({note:60,ch:0,sound:'Kick',vol:.9});learning=slots.length-1;save();renderSlots()};
+$('#wave').onchange=save;
+function trigger(s,vel){
+  const b=s.sound==='__file'?s.buf:SOUNDS[s.sound];
+  if(b)playBuf(b,vel,s.vol);
+  const row=document.querySelector(`.slot[data-i="${slots.indexOf(s)}"]`);
+  if(row){row.classList.add('hit');setTimeout(()=>row.classList.remove('hit'),110)}
+}
+
+/* ---------- keyboard display ---------- */
+(function(){
+  const kb=$('#kb'),W=24,BW=14;let wi=0;
+  for(let n=36;n<=96;n++){
+    const k=document.createElement('div');k.dataset.n=n;
+    if([1,3,6,8,10].includes(n%12)){k.className='bk';k.style.left=(wi*W-BW/2)+'px'}
+    else{k.className='wk';wi++;if(n%12===0)k.innerHTML=`<i>C${(n/12|0)-1}</i>`}
+    kb.append(k);
+  }
+  $('#kbwrap').scrollLeft=7*W;
+})();
+const keyEl=n=>document.querySelector(`#kb [data-n="${n}"]`);
+
+/* ---------- CC cards ---------- */
+const ccs={};
+const TARGETS={none:'No target',vol:'Master volume',cut:'Filter cutoff',dly:'Delay amount'};
+function ccCard(n){
+  const d=document.createElement('div');d.className='card';
+  d.innerHTML=`<b>${n===1?'Joystick up (CC 1)':n===64?'Sustain (CC 64)':'CC '+n}</b><div class="meter"><b></b></div><span class="mut">0</span>
+    <select aria-label="Target for CC ${n}">${Object.entries(TARGETS).map(([k,v])=>`<option value="${k}"${ccTargets[n]===k?' selected':''}>${v}</option>`).join('')}</select>`;
+  d.querySelector('select').onchange=e=>{ccTargets[n]=e.target.value;save()};
+  $('#ccs').append(d);return ccs[n]={bar:d.querySelector('.meter b'),txt:d.querySelector('span')};
+}
+function applyCC(n,v){
+  const c=ccs[n]||ccCard(n);c.bar.style.width=v/127*100+'%';c.txt.textContent=v;
+  if(ctx){const t=ccTargets[n];
+    if(t==='vol')master.gain.value=v/127*1.2;
+    if(t==='cut')filt.frequency.value=80*2**(v/127*7.8);
+    if(t==='dly')dlyG.gain.value=v/127*.9;}
+  if(n===64){sus=v>=64;if(!sus){held.forEach(x=>synthOff(x));held.clear()}}
+}
+
+/* ---------- MIDI handling ---------- */
+function handle(d,ts,live){
+  if(!ctx)initAudio();
+  const st=d[0];if(st>=0xF0)return;
+  const type=st&0xF0,ch=st&15,a=d[1],b=d[2]||0;
+  if(live&&rec)recEv.push({t:ts-recT0,d:Array.from(d)});
+  const names={0x80:'note off',0x90:'note on',0xA0:'poly pressure',0xB0:'cc',0xC0:'program',0xD0:'pressure',0xE0:'pitch bend'};
+  logLines.push(`ch${String(ch+1).padStart(2)} ${names[type]||'?'} ${a} ${type===0xC0||type===0xD0?'':b}`);
+  if(logLines.length>60)logLines.shift();
+  $('#log').textContent=logLines.join('\n');$('#log').scrollTop=1e5;
+  if(type===0x90&&b>0){
+    if(learning>=0){slots[learning].note=a;slots[learning].ch=ch;learning=-1;save();renderSlots();return}
+    keyEl(a)?.classList.add('on');
+    const s=slots.find(x=>x.note===a&&x.ch===ch);
+    if(s)trigger(s,b);else if(ch!==9)synthOn(a,b);
+  }else if(type===0x80||type===0x90){
+    keyEl(a)?.classList.remove('on');
+    if(!slots.some(x=>x.note===a&&x.ch===ch)&&ch!==9){sus?held.add(a):synthOff(a)}
+  }else if(type===0xB0)applyCC(a,b);
+  else if(type===0xC0)$('#prog').textContent=a+1;
+  else if(type===0xD0||type===0xA0){const v=type===0xD0?a:b;$('#atm').style.width=v/127*100+'%';$('#atv').textContent=v}
+  else if(type===0xE0){
+    bend=(((b<<7)|a)-8192)/8192;
+    $('#bendm').style.width=(bend+1)*50+'%';$('#bendv').textContent=bend.toFixed(2);
+    voices.forEach(v=>v.o.detune.value=bend*200);
+  }
+}
+$('#connect').onclick=async()=>{
+  initAudio();await ctx.resume();
+  if(!navigator.requestMIDIAccess){$('#status').textContent='This browser has no Web MIDI support. Use Chrome, Edge or Opera.';return}
+  try{midiAccess=await navigator.requestMIDIAccess()}catch(e){$('#status').textContent='MIDI access was blocked. Allow it in the site settings and try again.';return}
+  midiAccess.onstatechange=refreshInputs;refreshInputs();
+};
+function refreshInputs(){
+  const names=[];
+  midiAccess.inputs.forEach(i=>{i.onmidimessage=e=>handle(e.data,e.timeStamp,true);if(i.state==='connected')names.push(i.name)});
+  $('#status').textContent=names.length?'Listening to: '+names.join(', '):'Connected, but no MIDI device found. Plug in the MPK Mini.';
+}
+$('#panic').onclick=allOff;
+
+/* ---------- recording ---------- */
+let rec=null,recEv=[],recT0=0,chunks=[],takeN=0,playTimers=[];
+$('#rec').onclick=()=>{
+  initAudio();ctx.resume();
+  if(!rec){
+    chunks=[];recEv=[];recT0=performance.now();
+    rec=new MediaRecorder(recDest.stream);
+    rec.ondataavailable=e=>chunks.push(e.data);
+    rec.onstop=()=>addTake(new Blob(chunks,{type:rec.mimeType}),recEv.filter(e=>e.d[0]<0xF0));
+    rec.start();$('#rec').classList.add('on');$('#rec').textContent='■ Stop';$('#recinfo').textContent='Recording…';
+  }else{rec.stop();rec=null;$('#rec').classList.remove('on');$('#rec').textContent='● Record';$('#recinfo').textContent='Saved below.'}
+};
+function dl(blob,name){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),5000)}
+function addTake(blob,evs){
+  const n=++takeN,div=document.createElement('div');div.className='take';
+  const au=document.createElement('audio');au.controls=true;au.src=URL.createObjectURL(blob);
+  const mk=(t,f)=>{const b=document.createElement('button');b.textContent=t;b.onclick=f;return b};
+  div.append(`Take ${n}`,au,
+    mk('Download WAV',async b=>{try{dl(await toWav(blob),`take-${n}.wav`)}catch(e){dl(blob,`take-${n}.webm`)}}),
+    mk('Download MIDI',()=>dl(toMid(evs),`take-${n}.mid`)),
+    mk('Replay MIDI',()=>{playTimers.forEach(clearTimeout);allOff();playTimers=evs.map(e=>setTimeout(()=>handle(new Uint8Array(e.d),0,false),e.t))}));
+  $('#takes').prepend(div);
+}
+async function toWav(blob){
+  const ab=await ctx.decodeAudioData(await blob.arrayBuffer()),n=ab.length,c=ab.numberOfChannels,sr=ab.sampleRate;
+  const buf=new ArrayBuffer(44+n*c*2),v=new DataView(buf),w=(o,s)=>[...s].forEach((ch,i)=>v.setUint8(o+i,ch.charCodeAt(0)));
+  w(0,'RIFF');v.setUint32(4,36+n*c*2,true);w(8,'WAVEfmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,c,true);
+  v.setUint32(24,sr,true);v.setUint32(28,sr*c*2,true);v.setUint16(32,c*2,true);v.setUint16(34,16,true);w(36,'data');v.setUint32(40,n*c*2,true);
+  const ch=[...Array(c)].map((_,i)=>ab.getChannelData(i));let o=44;
+  for(let i=0;i<n;i++)for(let k=0;k<c;k++){const s=Math.max(-1,Math.min(1,ch[k][i]));v.setInt16(o,s<0?s*32768:s*32767,true);o+=2}
+  return new Blob([buf],{type:'audio/wav'});
+}
+function toMid(evs){
+  const vlq=v=>{const r=[v&127];while(v>>=7)r.unshift((v&127)|128);return r};
+  const b=[0,0xFF,0x51,3,0x07,0xA1,0x20];let last=0; // 120 bpm, 480 ticks per beat
+  for(const e of evs){const t=Math.round(e.t*.96);b.push(...vlq(Math.max(0,t-last)),...e.d);last=Math.max(last,t)}
+  b.push(0,0xFF,0x2F,0);const L=b.length;
+  return new Blob([new Uint8Array([0x4d,0x54,0x68,0x64,0,0,0,6,0,0,0,1,1,0xE0,0x4d,0x54,0x72,0x6b,L>>>24,L>>16&255,L>>8&255,L&255,...b])],{type:'audio/midi'});
+}
+
+renderSlots();
+</script>
+</body>
+</html>
