@@ -55,7 +55,9 @@ audio{height:32px}
   <div id="slots"></div>
   <button id="addslot">Add mapping</button>
   <label class="mut" style="margin-left:12px">Synth for keys
-    <select id="wave"><option>sine</option><option>triangle</option><option selected>sawtooth</option><option>square</option><option value="off">off</option></select></label>
+    <select id="wave"><option value="piano" selected>Grand piano</option><option>sine</option><option>triangle</option><option>sawtooth</option><option>square</option><option value="off">off</option></select></label>
+  <label class="mut" style="margin-left:12px"><input type="checkbox" id="ring"> Let notes ring after release</label>
+  <span class="mut" id="pstat" style="margin-left:12px"></span>
 </section>
 
 <section>
@@ -92,7 +94,6 @@ let ctx,bus,filt,master,dly,dlyG,recDest,midiAccess;
 let bend=0,sus=false,logLines=[];
 const voices=new Map(),held=new Set();
 
-
 function initAudio(){
   if(ctx)return;
   ctx=new AudioContext();
@@ -105,12 +106,34 @@ function initAudio(){
   filt.connect(master);master.connect(ctx.destination);
   recDest=ctx.createMediaStreamDestination();master.connect(recDest);
   buildSounds();
+  loadPiano();
 }
-const SOUNDS={};
+const pianoBufs=[];let pianoState=0;
+function loadPiano(){
+  if(pianoState)return;pianoState=1;
+  const semis={C:0,Ds:3,Fs:6,A:9};
+  const names=['A0',...[1,2,3,4,5,6,7].flatMap(o=>['C','Ds','Fs','A'].map(x=>x+o)),'C8'];
+  const status=$('#pstat');let done=0;
+  status.textContent='Loading piano samples…';
+  Promise.all(names.map(async nm=>{
+    try{
+      const r=await fetch('https://tonejs.github.io/audio/salamander/'+nm+'.mp3');
+      const buf=await ctx.decodeAudioData(await r.arrayBuffer());
+      const m=nm.match(/^([A-G]s?)(\d)$/);
+      pianoBufs.push({midi:12*(+m[2]+1)+semis[m[1]],buf});
+    }catch(e){}
+    done++;status.textContent=`Loading piano samples… ${done}/${names.length}`;
+  })).then(()=>{
+    if(pianoBufs.length)status.textContent='Piano samples ready';
+    else{status.textContent='Could not load piano samples, using the built-in piano.';pianoState=0}
+  });
+}
+const SOUNDS={};let thump;
 function mk(len,fn){const b=ctx.createBuffer(1,ctx.sampleRate*len|0,ctx.sampleRate),d=b.getChannelData(0);for(let i=0;i<d.length;i++)d[i]=fn(i/ctx.sampleRate);return b}
 function buildSounds(){
   const sr=ctx.sampleRate,T=2*Math.PI,nz=()=>Math.random()*2-1;
   const sweep=(f0,f1,k,dec,len)=>{let p=0;return mk(len,t=>{p+=T*(f1+f0*Math.exp(-t*k))/sr;return Math.sin(p)*Math.exp(-t*dec)})};
+  thump=mk(.04,t=>nz()*Math.exp(-t*120));
   SOUNDS.Kick=sweep(130,45,28,7,.5);
   SOUNDS.Tom=sweep(90,110,14,6,.5);
   SOUNDS.Zap=sweep(2000,100,9,5,.4);
@@ -127,27 +150,58 @@ function playBuf(buf,vel,vol){
 function synthOn(n,vel){
   const type=$('#wave').value;if(type==='off')return;
   synthOff(n,true);
-  const o=ctx.createOscillator(),g=ctx.createGain(),t=ctx.currentTime;
-  o.type=type;o.frequency.value=440*2**((n-69)/12);o.detune.value=bend*200;
-  g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(vel/127*.35,t+.01);
-  o.connect(g);g.connect(bus);o.start();voices.set(n,{o,g});
+  const t=ctx.currentTime,g=ctx.createGain(),oscs=[],f=440*2**((n-69)/12),v=vel/127,piano=type==='piano';
+  g.connect(bus);
+  if(piano&&pianoBufs.length){
+    let best=pianoBufs[0];
+    for(const p of pianoBufs)if(Math.abs(p.midi-n)<Math.abs(best.midi-n))best=p;
+    const src=ctx.createBufferSource();
+    src.buffer=best.buf;src.playbackRate.value=2**((n-best.midi)/12);src.detune.value=bend*200;
+    g.gain.value=.8*v**1.3;src.connect(g);src.start(t);
+    voices.set(n,{oscs:[src],g,piano:true});
+    return;
+  }
+  if(piano){
+    const tau=4.5*2**(-(n-21)/30);
+    g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(.22*(.35+.65*v),t+.004);
+    for(let k=1;k<=10;k++){
+      const fk=f*k*Math.sqrt(1+.0004*k*k);if(fk>16000)break;
+      const amp=(1/k**1.15)*(.45+.55*v)**(k-1);
+      const dets=k<=3?[-2,2]:[0];
+      for(const d of dets){
+        const o=ctx.createOscillator(),pg=ctx.createGain();
+        o.frequency.value=fk;o._d=d;o.detune.value=d+bend*200;
+        pg.gain.setValueAtTime(amp/dets.length,t);pg.gain.setTargetAtTime(0,t,tau/(1+.5*(k-1)));
+        o.connect(pg);pg.connect(g);o.start(t);o.stop(t+tau*6);oscs.push(o);
+      }
+    }
+    const h=ctx.createBufferSource(),hg=ctx.createGain();h.buffer=thump;hg.gain.value=.1*v;h.connect(hg);hg.connect(bus);h.start(t);
+  }else{
+    const o=ctx.createOscillator();
+    o.type=type;o.frequency.value=f;o.detune.value=bend*200;
+    g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(v*.35,t+.01);
+    o.connect(g);o.start();oscs.push(o);
+  }
+  voices.set(n,{oscs,g,piano});
 }
 function synthOff(n,now){
   const v=voices.get(n);if(!v)return;
-  const t=ctx.currentTime,r=now?.01:.18;
+  const ring=$('#ring').checked;
+  if(!now&&v.piano&&ring)return;
+  const t=ctx.currentTime,r=now?.01:ring?2.5:v.piano?.3:.18;
   v.g.gain.cancelScheduledValues(t);v.g.gain.setValueAtTime(v.g.gain.value,t);
-  v.g.gain.linearRampToValueAtTime(0,t+r);v.o.stop(t+r+.02);voices.delete(n);
+  v.g.gain.linearRampToValueAtTime(0,t+r);v.oscs.forEach(o=>o.stop(t+r+.02));voices.delete(n);
 }
-function allOff(){[...voices.keys()].forEach(n=>synthOff(n));held.clear()}
-
+function allOff(){[...voices.keys()].forEach(n=>synthOff(n,true));held.clear()}
 
 const DEFAULTS=['Kick','Snare','Hat','Clap','Tom','Rim','Bell','Zap'];
 let saved={};try{saved=JSON.parse(localStorage.getItem('mpk-studio')||'{}')}catch(e){}
 let slots=saved.slots||DEFAULTS.map((s,i)=>({note:36+i,ch:9,sound:s,vol:.9}));
 let ccTargets=saved.cc||{};
 if(saved.wave)$('#wave').value=saved.wave;
+$('#ring').checked=!!saved.ring;
 let learning=-1;
-function save(){try{localStorage.setItem('mpk-studio',JSON.stringify({slots:slots.map(({buf,...r})=>r),cc:ccTargets,wave:$('#wave').value}))}catch(e){}}
+function save(){try{localStorage.setItem('mpk-studio',JSON.stringify({slots:slots.map(({buf,...r})=>r),cc:ccTargets,wave:$('#wave').value,ring:$('#ring').checked}))}catch(e){}}
 function renderSlots(){
   $('#slots').innerHTML=slots.map((s,i)=>`<div class="slot${learning===i?' learn':''}" data-i="${i}">
     <button data-a="learn">${learning===i?'Waiting…':'Learn'}</button>
@@ -177,14 +231,13 @@ $('#slots').addEventListener('change',async e=>{
   }
 });
 $('#addslot').onclick=()=>{slots.push({note:60,ch:0,sound:'Kick',vol:.9});learning=slots.length-1;save();renderSlots()};
-$('#wave').onchange=save;
+$('#wave').onchange=()=>{save();if(ctx&&$('#wave').value==='piano')loadPiano()};$('#ring').onchange=save;
 function trigger(s,vel){
   const b=s.sound==='__file'?s.buf:SOUNDS[s.sound];
   if(b)playBuf(b,vel,s.vol);
   const row=document.querySelector(`.slot[data-i="${slots.indexOf(s)}"]`);
   if(row){row.classList.add('hit');setTimeout(()=>row.classList.remove('hit'),110)}
 }
-
 
 (function(){
   const kb=$('#kb'),W=24,BW=14;let wi=0;
@@ -197,7 +250,6 @@ function trigger(s,vel){
   $('#kbwrap').scrollLeft=7*W;
 })();
 const keyEl=n=>document.querySelector(`#kb [data-n="${n}"]`);
-
 
 const ccs={};
 const TARGETS={none:'No target',vol:'Master volume',cut:'Filter cutoff',dly:'Delay amount'};
@@ -216,7 +268,6 @@ function applyCC(n,v){
     if(t==='dly')dlyG.gain.value=v/127*.9;}
   if(n===64){sus=v>=64;if(!sus){held.forEach(x=>synthOff(x));held.clear()}}
 }
-
 
 function handle(d,ts,live){
   if(!ctx)initAudio();
@@ -241,11 +292,12 @@ function handle(d,ts,live){
   else if(type===0xE0){
     bend=(((b<<7)|a)-8192)/8192;
     $('#bendm').style.width=(bend+1)*50+'%';$('#bendv').textContent=bend.toFixed(2);
-    voices.forEach(v=>v.o.detune.value=bend*200);
+    voices.forEach(v=>v.oscs.forEach(o=>{if(o.detune)o.detune.value=(o._d||0)+bend*200}));
   }
 }
 $('#connect').onclick=async()=>{
   initAudio();await ctx.resume();
+  if(!window.isSecureContext){$('#status').textContent='This page is loaded over http, and browsers only allow MIDI on https pages. Open it from an https address (such as GitHub Pages) or from localhost.';return}
   if(!navigator.requestMIDIAccess){$('#status').textContent='This browser has no Web MIDI support. Use Chrome, Edge or Opera.';return}
   try{midiAccess=await navigator.requestMIDIAccess()}catch(e){$('#status').textContent='MIDI access was blocked. Allow it in the site settings and try again.';return}
   midiAccess.onstatechange=refreshInputs;refreshInputs();
@@ -257,7 +309,6 @@ function refreshInputs(){
 }
 $('#panic').onclick=allOff;
 
-/* ---------- recording ---------- */
 let rec=null,recEv=[],recT0=0,chunks=[],takeN=0,playTimers=[];
 $('#rec').onclick=()=>{
   initAudio();ctx.resume();
@@ -291,7 +342,7 @@ async function toWav(blob){
 }
 function toMid(evs){
   const vlq=v=>{const r=[v&127];while(v>>=7)r.unshift((v&127)|128);return r};
-  const b=[0,0xFF,0x51,3,0x07,0xA1,0x20];let last=0; // 120 bpm, 480 ticks per beat
+  const b=[0,0xFF,0x51,3,0x07,0xA1,0x20];let last=0;
   for(const e of evs){const t=Math.round(e.t*.96);b.push(...vlq(Math.max(0,t-last)),...e.d);last=Math.max(last,t)}
   b.push(0,0xFF,0x2F,0);const L=b.length;
   return new Blob([new Uint8Array([0x4d,0x54,0x68,0x64,0,0,0,6,0,0,0,1,1,0xE0,0x4d,0x54,0x72,0x6b,L>>>24,L>>16&255,L>>8&255,L&255,...b])],{type:'audio/midi'});
