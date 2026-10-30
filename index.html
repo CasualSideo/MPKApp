@@ -92,7 +92,7 @@ let ctx,bus,filt,master,dly,dlyG,recDest,midiAccess;
 let bend=0,sus=false,logLines=[];
 const voices=new Map(),held=new Set();
 
-/* ---------- audio ---------- */
+
 function initAudio(){
   if(ctx)return;
   ctx=new AudioContext();
@@ -140,7 +140,7 @@ function synthOff(n,now){
 }
 function allOff(){[...voices.keys()].forEach(n=>synthOff(n));held.clear()}
 
-/* ---------- mappings ---------- */
+
 const DEFAULTS=['Kick','Snare','Hat','Clap','Tom','Rim','Bell','Zap'];
 let saved={};try{saved=JSON.parse(localStorage.getItem('mpk-studio')||'{}')}catch(e){}
 let slots=saved.slots||DEFAULTS.map((s,i)=>({note:36+i,ch:9,sound:s,vol:.9}));
@@ -185,7 +185,7 @@ function trigger(s,vel){
   if(row){row.classList.add('hit');setTimeout(()=>row.classList.remove('hit'),110)}
 }
 
-/* ---------- keyboard display ---------- */
+
 (function(){
   const kb=$('#kb'),W=24,BW=14;let wi=0;
   for(let n=36;n<=96;n++){
@@ -198,7 +198,7 @@ function trigger(s,vel){
 })();
 const keyEl=n=>document.querySelector(`#kb [data-n="${n}"]`);
 
-/* ---------- CC cards ---------- */
+
 const ccs={};
 const TARGETS={none:'No target',vol:'Master volume',cut:'Filter cutoff',dly:'Delay amount'};
 function ccCard(n){
@@ -217,7 +217,7 @@ function applyCC(n,v){
   if(n===64){sus=v>=64;if(!sus){held.forEach(x=>synthOff(x));held.clear()}}
 }
 
-/* ---------- MIDI handling ---------- */
+
 function handle(d,ts,live){
   if(!ctx)initAudio();
   const st=d[0];if(st>=0xF0)return;
