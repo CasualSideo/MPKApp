@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MPK Mini Studio</title>
+<title>MPK Studio</title>
 <style>
 :root{--bg:#1c1f24;--panel:#262a31;--line:#383d47;--tx:#eceae4;--mut:#9aa0ad;--pad:#ff4d3d;--amb:#ffb43a;color-scheme:dark}
 *{box-sizing:border-box}
@@ -59,7 +59,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </head>
 <body>
 <header>
-  <div><h1>MPK Mini Studio</h1><div id="status">Click Connect, then allow MIDI access. Works in Chrome, Edge and Opera.</div></div>
+  <div><h1>MPK Studio</h1><div id="status">Click Connect, then allow MIDI access. Works in Chrome, Edge and Opera.</div></div>
   <div><button class="primary" id="connect">Connect MIDI</button> <button id="panic">All notes off</button></div>
 </header>
 
@@ -133,13 +133,12 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 
 <section>
   <h2>Pad lights (experimental)</h2>
-  <p class="mut" style="margin-top:0"><b>This might not work.</b> Akai doesn’t publish a way to change the MPK Mini MK3 pad colors from a web page, so this sends ordinary note messages to the pads and hopes the lights respond. It never sends settings or presets. Move the slider and press Light all pads to see what your controller does.</p>
+  <p class="mut" style="margin-top:0"><b>This might not work.</b> 
   <div class="row" style="align-items:center">
     <label class="mut">Color value <input type="range" id="ledv" min="0" max="127" value="21"> <span id="ledn">21</span></label>
     <label class="mut">Channel <select id="ledch"><option value="pad">Same as the pad</option><option value="0">1</option><option value="1">2</option><option value="2">3</option><option value="3">4</option><option value="4">5</option><option value="5">6</option><option value="6">7</option><option value="7">8</option><option value="8">9</option><option value="9">10</option><option value="10">11</option><option value="11">12</option><option value="12">13</option><option value="13">14</option><option value="14">15</option><option value="15">16</option></select></label>
     <button id="ledon">Light all pads</button>
     <button id="ledoff">Turn off</button>
-    <label class="mut"><input type="checkbox" id="ledhit"> Also light a pad when I hit it</label>
   </div>
   <p class="mut" id="ledstat" style="margin-bottom:0"></p>
 </section>
@@ -493,7 +492,7 @@ $('#connect').onclick=async()=>{
 function refreshInputs(){
   const names=[];
   midiAccess.inputs.forEach(i=>{i.onmidimessage=e=>handle(e.data,e.timeStamp,true);if(i.state==='connected')names.push(i.name)});
-  $('#status').textContent=names.length?'Listening to: '+names.join(', '):'Connected, but no MIDI device found. Plug in the MPK Mini.';
+  $('#status').textContent=names.length?'Listening to: '+names.join(', '):'Connected, but no MIDI device found. Plug in the MPK Device.';
 }
 $('#sff').onchange=async e=>{
   const f=e.target.files[0];
